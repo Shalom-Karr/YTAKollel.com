@@ -1,7 +1,7 @@
 // ------------------------------------------------------------------
 // IMPORTANT: Change this to the URL of the website you want to proxy
 // ------------------------------------------------------------------
-const ORIGIN_URL = 'https://thechesedfund.com/tiferesavigdor/menorah-campaign-2025';
+const ORIGIN_URL = 'https://thechesedfund.com/tiferesavigdor/menorah-campaign-2025/';
 
 export default {
   async fetch(request, env, ctx) {
