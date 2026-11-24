@@ -1,197 +1,141 @@
-// ------------------------------------------------------------------
-// IMPORTANT: Change this to the URL of the website you want to proxy
-// ------------------------------------------------------------------
-const ORIGIN_URL = 'https://thechesedfund.com/tiferesavigdor/menorah-campaign-2025/';
+const DEFAULT_URL = 'https://thechesedfund.com/tiferesavigdor/chanukah';
+
+function checkAuth(request, env) {
+  const auth = request.headers.get('Authorization') || '';
+  if (!auth.startsWith('Basic ')) return false;
+  const decoded = atob(auth.slice(6));
+  const password = decoded.slice(decoded.indexOf(':') + 1);
+  return password === (env.ADMIN_PASSWORD || 'changeme');
+}
+
+function unauthorizedResponse() {
+  return new Response('Unauthorized', {
+    status: 401,
+    headers: { 'WWW-Authenticate': 'Basic realm="YTA Admin"' },
+  });
+}
+
+async function listRedirects(env) {
+  const list = await env.REDIRECTS.list();
+  return await Promise.all(
+    list.keys.map(async ({ name }) => ({ path: name, url: await env.REDIRECTS.get(name) }))
+  );
+}
+
+function adminPage(entries) {
+  const rows = entries.map(e => `
+    <tr>
+      <td><code>/${e.path}</code></td>
+      <td><a href="${e.url}" target="_blank">${e.url}</a></td>
+      <td>
+        <form method="POST" action="/admin/delete" style="display:inline">
+          <input type="hidden" name="path" value="${e.path}">
+          <button class="del" onclick="return confirm('Delete /${e.path}?')">Delete</button>
+        </form>
+      </td>
+    </tr>`).join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>YTA Redirect Admin</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,sans-serif;background:#f4f6f8;color:#1a1a1a;padding:2rem}
+  h1{font-size:1.4rem;margin-bottom:1.5rem;color:#1a4080}
+  .card{background:#fff;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.1);padding:1.5rem;margin-bottom:1.5rem}
+  h2{font-size:1rem;margin-bottom:1rem;color:#444}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:.6rem .8rem;border-bottom:1px solid #e8eaed;font-size:.9rem}
+  th{background:#f0f4ff;font-weight:600}
+  code{background:#f0f4ff;padding:.1rem .4rem;border-radius:4px;font-size:.85rem}
+  .form-row{display:flex;gap:.75rem;flex-wrap:wrap;align-items:flex-end}
+  .form-group{display:flex;flex-direction:column;gap:.3rem}
+  label{font-size:.8rem;font-weight:600;color:#555}
+  input[type=text]{padding:.5rem .75rem;border:1px solid #cdd2d8;border-radius:6px;font-size:.9rem;width:220px}
+  input[type=text]:focus{outline:none;border-color:#3b82f6}
+  button{padding:.5rem 1rem;border:none;border-radius:6px;cursor:pointer;font-size:.9rem;font-weight:600}
+  .add{background:#1a4080;color:#fff}
+  .add:hover{background:#153366}
+  .del{background:#fee2e2;color:#b91c1c}
+  .del:hover{background:#fecaca}
+  .empty{color:#999;font-style:italic;padding:.8rem}
+  .default{background:#f0f4ff;border-radius:6px;padding:.75rem 1rem;font-size:.85rem;color:#444;margin-bottom:1rem}
+  .default strong{color:#1a4080}
+</style>
+</head>
+<body>
+<h1>YTA Redirect Admin</h1>
+
+<div class="card">
+  <h2>Add Redirect</h2>
+  <p class="default">Default (all unmatched paths): <strong>${DEFAULT_URL}</strong></p>
+  <form method="POST" action="/admin/add">
+    <div class="form-row">
+      <div class="form-group">
+        <label>Path (without /)</label>
+        <input type="text" name="path" placeholder="cysk" required>
+      </div>
+      <div class="form-group">
+        <label>Destination URL</label>
+        <input type="text" name="url" placeholder="https://thechesedfund.com/..." required style="width:380px">
+      </div>
+      <button class="add" type="submit">Add</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Current Redirects</h2>
+  <table>
+    <thead><tr><th>Path</th><th>Destination</th><th></th></tr></thead>
+    <tbody>
+      ${rows.length ? rows : '<tr><td colspan="3" class="empty">No custom redirects yet.</td></tr>'}
+    </tbody>
+  </table>
+</div>
+</body>
+</html>`;
+}
 
 export default {
-  async fetch(request, env, ctx) {
-    try {
-      const url = new URL(request.url);
-      const targetUrl = new URL(url.pathname + url.search, ORIGIN_URL);
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const path = url.pathname;
 
-      const headers = new Headers(request.headers);
+    // Admin routes
+    if (path === '/admin' || path.startsWith('/admin/')) {
+      if (!checkAuth(request, env)) return unauthorizedResponse();
 
-      // Essential headers for Discourse
-      headers.set('Host', new URL(ORIGIN_URL).hostname);
-      headers.set('X-Forwarded-For', request.headers.get('CF-Connecting-IP') || '127.0.0.1');
-      headers.set('X-Forwarded-Proto', url.protocol.replace(':', ''));
-      headers.set('X-Forwarded-Host', url.hostname);
-
-      // Fix Origin - Discourse checks this for CSRF
-      if (headers.has('Origin')) {
-        headers.set('Origin', ORIGIN_URL);
+      if (path === '/admin/add' && request.method === 'POST') {
+        const form = await request.formData();
+        const p = (form.get('path') || '').replace(/^\/+/, '').trim();
+        const u = (form.get('url') || '').trim();
+        if (p && u) await env.REDIRECTS.put(p, u);
+        return Response.redirect(url.origin + '/admin', 303);
       }
 
-      // Fix Referer - Discourse REQUIRES this for login/POST requests
-      if (headers.has('Referer')) {
-        const referer = headers.get('Referer');
-        try {
-          const refererUrl = new URL(referer);
-          const newReferer = ORIGIN_URL + refererUrl.pathname + refererUrl.search;
-          headers.set('Referer', newReferer);
-        } catch (e) {
-          headers.set('Referer', ORIGIN_URL + '/');
-        }
+      if (path === '/admin/delete' && request.method === 'POST') {
+        const form = await request.formData();
+        const p = (form.get('path') || '').trim();
+        if (p) await env.REDIRECTS.delete(p);
+        return Response.redirect(url.origin + '/admin', 303);
       }
 
-      // For POST requests without referer, add one
-      if (request.method === 'POST' && !headers.has('Referer')) {
-        headers.set('Referer', ORIGIN_URL + '/');
-      }
-
-      // Handle request body - ONLY read it once
-      let body = null;
-      if (request.method !== 'GET' && request.method !== 'HEAD') {
-        body = request.body;
-      }
-
-      // Create proxied request
-      const proxiedRequest = new Request(targetUrl.toString(), {
-        method: request.method,
-        headers: headers,
-        body: body,
-        redirect: 'manual'
-      });
-
-      // Fetch from origin
-      let response = await fetch(proxiedRequest);
-
-      // Clone response to modify it
-      const responseHeaders = new Headers(response.headers);
-
-      // Fix redirect locations
-      if (responseHeaders.has('Location')) {
-        let location = responseHeaders.get('Location');
-        location = location.replace(ORIGIN_URL, url.protocol + '//' + url.hostname);
-        location = location.replace('forums.jtechforums.org', url.hostname);
-        if (location.startsWith('//forums.jtechforums.org')) {
-          location = location.replace('//forums.jtechforums.org', '//' + url.hostname);
-        }
-        responseHeaders.set('Location', location);
-      }
-
-      // Fix CSP
-      if (responseHeaders.has('Content-Security-Policy')) {
-        let csp = responseHeaders.get('Content-Security-Policy');
-        csp = csp.replace(/forums\.jtechforums\.org/g, url.hostname);
-        responseHeaders.set('Content-Security-Policy', csp);
-      }
-
-      // Fix Strict-Transport-Security for HTTP testing
-      if (url.protocol === 'http:') {
-        responseHeaders.delete('Strict-Transport-Security');
-      }
-
-      // Handle cookies - CRITICAL for authentication
-      const newCookies = [];
-
-      // Get all Set-Cookie headers
-      for (const [key, value] of response.headers.entries()) {
-        if (key.toLowerCase() === 'set-cookie') {
-          let cookie = value;
-
-          // Remove Domain restrictions
-          cookie = cookie.replace(/;\s*[Dd]omain=[^;]+/g, '');
-
-          // Fix Secure flag for HTTP
-          if (url.protocol === 'http:') {
-            cookie = cookie.replace(/;\s*[Ss]ecure/g, '');
-          }
-
-          // Ensure proper SameSite
-          if (cookie.match(/;\s*[Ss]ame[Ss]ite=[Ss]trict/)) {
-            cookie = cookie.replace(/;\s*[Ss]ame[Ss]ite=[Ss]trict/g, '; SameSite=Lax');
-          } else if (!cookie.match(/;\s*[Ss]ame[Ss]ite=/)) {
-            cookie = cookie + '; SameSite=Lax';
-          }
-
-          // Ensure Path is set
-          if (!cookie.match(/;\s*[Pp]ath=/)) {
-            cookie = cookie + '; Path=/';
-          }
-
-          newCookies.push(cookie);
-        }
-      }
-
-      // Remove old cookies from headers
-      responseHeaders.delete('set-cookie');
-
-      // Set CORS headers
-      responseHeaders.set('Access-Control-Allow-Origin', url.protocol + '//' + url.hostname);
-      responseHeaders.set('Access-Control-Allow-Credentials', 'true');
-      responseHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-      responseHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Discourse-Present, X-CSRF-Token, Discourse-Logged-In, Discourse-Visible');
-
-      // Handle preflight
-      if (request.method === 'OPTIONS') {
-        return new Response(null, {
-          status: 204,
-          headers: responseHeaders
-        });
-      }
-
-      const contentType = responseHeaders.get('Content-Type') || '';
-
-      // Rewrite text-based content
-      if (contentType.includes('text/html') ||
-          contentType.includes('application/json') ||
-          contentType.includes('text/css') ||
-          contentType.includes('application/javascript') ||
-          contentType.includes('text/javascript')) {
-
-        let text = await response.text();
-
-        // Replace all occurrences of the original domain
-        text = text.replace(/https:\/\/forums\.jtechforums\.org/g, url.protocol + '//' + url.hostname);
-        text = text.replace(/http:\/\/forums\.jtechforums\.org/g, url.protocol + '//' + url.hostname);
-        text = text.replace(/\/\/forums\.jtechforums\.org/g, '//' + url.hostname);
-        text = text.replace(/"https:\/\/forums\.jtechforums\.org"/g, '"' + url.protocol + '//' + url.hostname + '"');
-        text = text.replace(/"http:\/\/forums\.jtechforums\.org"/g, '"' + url.protocol + '//' + url.hostname + '"');
-        text = text.replace(/"forums\.jtechforums\.org"/g, '"' + url.hostname + '"');
-        text = text.replace(/'forums\.jtechforums\.org'/g, "'" + url.hostname + "'");
-        text = text.replace(/wss:\/\/forums\.jtechforums\.org/g, 'wss://' + url.hostname);
-        text = text.replace(/ws:\/\/forums\.jtechforums\.org/g, (url.protocol === 'https:' ? 'wss://' : 'ws://') + url.hostname);
-
-        // Also replace in escaped formats (for JSON)
-        text = text.replace(/https:\\\/\\\/forums\\.jtechforums\\.org/g, url.protocol.replace(':', '') + ':\\/\\/' + url.hostname.replace(/\./g, '\\.'));
-
-        const finalResponse = new Response(text, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: responseHeaders
-        });
-
-        // Add all cookies
-        newCookies.forEach(function(cookie) {
-          finalResponse.headers.append('Set-Cookie', cookie);
-        });
-
-        return finalResponse;
-      }
-
-      // For binary/other content
-      const finalResponse = new Response(response.body, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: responseHeaders
-      });
-
-      // Add cookies
-      newCookies.forEach(function(cookie) {
-        finalResponse.headers.append('Set-Cookie', cookie);
-      });
-
-      return finalResponse;
-
-    } catch (error) {
-      return new Response('Proxy Error: ' + error.message + '\n\nStack:\n' + error.stack, {
-        status: 500,
-        headers: {
-          'Content-Type': 'text/plain',
-          'Access-Control-Allow-Origin': '*'
-        }
-      });
+      const entries = await listRedirects(env);
+      return new Response(adminPage(entries), { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
     }
+
+    // KV redirect lookup (first path segment only, e.g. /cysk or /cysk/anything)
+    const key = path.replace(/^\/+/, '').split('/')[0];
+    if (key) {
+      const dest = await env.REDIRECTS.get(key);
+      if (dest) return Response.redirect(dest, 301);
+    }
+
+    // Default
+    return Response.redirect(DEFAULT_URL, 301);
   }
 };

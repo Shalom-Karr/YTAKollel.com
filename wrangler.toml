@@ -1,3 +1,12 @@
-name = "ytakollel3"
+name = "ytakollel"
 main = "worker.js"
 compatibility_date = "2024-01-01"
+account_id = "fb2258137a91c86d09d7a4a9e5b18f56"
+
+routes = [
+  { pattern = "ytakollel.com/*", zone_name = "ytakollel.com" }
+]
+
+[[kv_namespaces]]
+binding = "REDIRECTS"
+id = "8b4bceceeee34acdaa707e60bd86e6ca"
